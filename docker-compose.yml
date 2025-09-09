@@ -1,49 +1,22 @@
 version: '3.8'
-
 services:
-  postgres:
-    image: postgres:15
-    environment:
-      POSTGRES_DB: tg_gifts
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-
   bot:
     build: .
     command: python bot/bot_main.py
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/tg_gifts
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      - postgres
-      - redis
+      - DATABASE_URL=sqlite+aiosqlite:///./tg_gifts.db
     volumes:
       - ./sessions:/app/sessions
       - ./logs:/app/logs
-
+      - ./tg_gifts.db:/app/tg_gifts.db
   buyer:
     build: .
     command: python buyer/api_server.py
     ports:
       - "8001:8001"
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/tg_gifts
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      - postgres
-      - redis
+      - DATABASE_URL=sqlite+aiosqlite:///./tg_gifts.db
     volumes:
       - ./sessions:/app/sessions
       - ./logs:/app/logs
-
-volumes:
-  postgres_data:
+      - ./tg_gifts.db:/app/tg_gifts.db

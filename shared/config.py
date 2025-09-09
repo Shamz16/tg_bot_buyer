@@ -1,9 +1,12 @@
-"""Configuration management using Pydantic"""
+    # Database
+    database_url: str = Field(
+        default="sqlite+aiosqlite:///./tg_gifts.db"
+    )
 
+"""Configuration management using Pydantic"""
 from typing import List, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, validator
-
 
 class Settings(BaseSettings):
     """Application settings with validation"""
@@ -23,7 +26,7 @@ class Settings(BaseSettings):
     
     # Database
     database_url: str = Field(
-        default="postgresql+asyncpg://postgres:postgres@localhost:5432/tg_gifts"
+        default="sqlite+aiosqlite:///./tg_gifts.db"
     )
     
     # Security
@@ -59,7 +62,6 @@ class Settings(BaseSettings):
     @property
     def is_development(self) -> bool:
         return self.environment == "development"
-
 
 # Global settings instance
 settings = Settings()

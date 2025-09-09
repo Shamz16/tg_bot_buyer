@@ -1,11 +1,16 @@
-"""MTProto client for gift discovery and purchasing"""
+```
 
+### 8. Отсутствует файл shared/utils.py с вспомогательными функциями
+
+```
+# shared/utils.py
+
+"""MTProto client for gift discovery and purchasing"""
 import asyncio
 import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 from pathlib import Path
-
 from telethon import TelegramClient
 from telethon.tl.functions.payments import (
     GetStarGiftsRequest,
@@ -17,15 +22,13 @@ from telethon.tl.types import (
     InputUserEmpty,
     InputUserSelf
 )
-
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from shared.config import settings
+from shared.utils import generate_transaction_id, parse_gift_attributes
 
 logger = logging.getLogger(__name__)
-
 
 class GiftBuyerClient:
     """MTProto client for gift operations"""
@@ -86,12 +89,7 @@ class GiftBuyerClient:
                         "first_sale_date": getattr(gift, "first_sale_date", None),
                         "last_sale_date": getattr(gift, "last_sale_date", None),
                         "model": getattr(gift, "title", "Unknown"),
-                        "attributes": {
-                            "backdrop": "",
-                            "symbol": "",
-                            "number": 0,
-                            "pattern": ""
-                        }
+                        "attributes": parse_gift_attributes(getattr(gift, "attributes", {}))
                     }
                     gifts.append(gift_data)
             
@@ -144,7 +142,7 @@ class GiftBuyerClient:
             # Mock successful purchase for demonstration
             purchase_result = {
                 "success": True,
-                "transaction_id": f"mock_tx_{datetime.now().timestamp()}",
+                "transaction_id": generate_transaction_id(),
                 "gift_id": gift["id"],
                 "price_stars": gift.get("price_stars", gift.get("stars", 0)),
                 "timestamp": datetime.now(timezone.utc),

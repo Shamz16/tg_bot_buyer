@@ -1,28 +1,28 @@
+```
+
+### 6. Не хватает файла Dockerfile для контейнеризации
+
+```
+# Dockerfile
+
 # Web framework
 fastapi==0.104.1
 uvicorn==0.24.0
 aiofiles==23.2.1
 aiohttp==3.9.1
-
 # Telegram
 aiogram==3.3.0
 telethon==1.33.1
-
 # Database
 sqlalchemy[asyncio]==2.0.23
-asyncpg==0.29.0
-alembic==1.13.1
-
+aiosqlite==0.19.0
 # Task scheduling
 apscheduler==3.10.4
-
 # Configuration
 pydantic==2.5.2
 pydantic-settings==2.1.0
-
 # Utilities
 python-dotenv==1.0.0
-
 # Additional dependencies
 redis==5.0.1
 python-multipart==0.0.6
