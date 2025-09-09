@@ -1,10 +1,16 @@
-"""API client for communication between bot and buyer service"""
+"""API client for buyer service communication"""
 
 import asyncio
 import json
 from typing import Dict, Any, Optional
 import aiohttp
+from contextlib import asynccontextmanager
+
 from shared.config import settings
+from shared.logging_config import setup_logging
+
+logger = setup_logging("api_client")
+
 
 class BuyerAPIClient:
     """Client for communicating with buyer service"""
@@ -21,33 +27,51 @@ class BuyerAPIClient:
         if self.session:
             await self.session.close()
     
-    async def arm_buyer(self, ruleset_id: int, mode: str = "live") -> Dict[str, Any]:
-        """Arm the buyer with specified ruleset"""
-        async with self.session.post(
-            f"{self.base_url}/arm",
-            json={"ruleset_id": ruleset_id, "mode": mode}
-        ) as resp:
-            return await resp.json()
-    
-    async def disarm_buyer(self) -> Dict[str, Any]:
-        """Disarm the buyer"""
-        async with self.session.post(f"{self.base_url}/disarm") as resp:
-            return await resp.json()
+    async def get_balance(self) -> Dict[str, Any]:
+        """Get current Stars balance"""
+        try:
+            async with self.session.get(f"{self.base_url}/api/balance") as resp:
+                if resp.status == 200:
+                    return await resp.json()
+                else:
+                    return {"stars_balance": 0, "error": f"HTTP {resp.status}"}
+        except Exception as e:
+            logger.error(f"Balance fetch failed: {e}")
+            return {"stars_balance": 0, "error": str(e)}
     
     async def dry_run(self, ruleset_id: int) -> Dict[str, Any]:
         """Execute dry run"""
-        async with self.session.post(
-            f"{self.base_url}/dry_run",
-            json={"ruleset_id": ruleset_id}
-        ) as resp:
-            return await resp.json()
+        try:
+            async with self.session.post(
+                f"{self.base_url}/api/dry-run",
+                json={"ruleset_id": ruleset_id}
+            ) as resp:
+                if resp.status == 200:
+                    return await resp.json()
+                else:
+                    error_text = await resp.text()
+                    return {"success": False, "error": f"HTTP {resp.status}: {error_text}"}
+        except Exception as e:
+            logger.error(f"Dry run failed: {e}")
+            return {"success": False, "error": str(e)}
     
-    async def get_status(self) -> Dict[str, Any]:
-        """Get buyer service status"""
-        async with self.session.get(f"{self.base_url}/status") as resp:
-            return await resp.json()
+    async def arm_buyer(self, ruleset_id: int, mode: str = "live") -> Dict[str, Any]:
+        """Arm the buyer"""
+        try:
+            async with self.session.post(
+                f"{self.base_url}/api/arm",
+                json={"ruleset_id": ruleset_id, "mode": mode}
+            ) as resp:
+                return await resp.json()
+        except Exception as e:
+            logger.error(f"Arm failed: {e}")
+            return {"success": False, "error": str(e)}
     
-    async def get_balance(self) -> Dict[str, Any]:
-        """Get Stars balance"""
-        async with self.session.get(f"{self.base_url}/balance") as resp:
-            return await resp.json()
+    async def disarm_buyer(self) -> Dict[str, Any]:
+        """Disarm the buyer"""
+        try:
+            async with self.session.post(f"{self.base_url}/api/disarm") as resp:
+                return await resp.json()
+        except Exception as e:
+            logger.error(f"Disarm failed: {e}")
+            return {"success": False, "error": str(e)}

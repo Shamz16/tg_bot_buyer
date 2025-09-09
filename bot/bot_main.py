@@ -1,15 +1,128 @@
 """Telegram Bot UI for Gift Buyer - Operator Interface"""
 
+import asyncio
+import logging
+from typing import Dict, Any, List, Optional
+
+from aiogram import Bot, Dispatcher, Router, F
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
+
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy import select
+
 # Add these imports at the top
 from shared.api_client import BuyerAPIClient
 from shared.logging_config import setup_logging
+from shared.config import settings
+from database.models import Base, Ruleset, Run, Purchase
 
 # Add after other imports
 logger = setup_logging("bot")
 
-# Update the balance handler to use real API
-@dp.callback_query(F.data == "balance")
-async def handle_balance(callback: types.CallbackQuery):
+# Database setup
+engine = create_async_engine(settings.database_url)
+async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+# Bot setup
+bot = Bot(token=settings.bot_token)
+storage = MemoryStorage()
+dp = Dispatcher(storage=storage)
+router = Router()
+dp.include_router(router)
+
+# States for FSM
+class RulesetStates(StatesGroup):
+    waiting_for_name = State()
+    waiting_for_rules = State()
+
+
+def is_operator(user_id: int) -> bool:
+    """Check if user is authorized operator"""
+    return user_id in settings.operator_user_ids
+
+
+def create_main_keyboard() -> InlineKeyboardMarkup:
+    """Create main control keyboard"""
+    keyboard = [
+        [
+            InlineKeyboardButton(text="📊 Status", callback_data="status"),
+            InlineKeyboardButton(text="💰 Balance", callback_data="balance")
+        ],
+        [
+            InlineKeyboardButton(text="📋 Rules", callback_data="rules"),
+            InlineKeyboardButton(text="🧪 Dry Run", callback_data="dryrun")
+        ],
+        [
+            InlineKeyboardButton(text="▶️ Arm", callback_data="arm"),
+            InlineKeyboardButton(text="⏸️ Disarm", callback_data="disarm")
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+@router.message(Command("start"))
+async def cmd_start(message: Message):
+    """Start command handler"""
+    if not is_operator(message.from_user.id):
+        await message.reply("❌ Unauthorized access")
+        return
+
+    welcome_text = (
+        "🤖 **Telegram Gift Buyer Control Panel**\n\n"
+        "Welcome to the automated gift buyer interface. "
+        "Use the buttons below to control the system.\n\n"
+        "⚠️ **Safety First**: Always test with dry runs before arming!"
+    )
+    
+    await message.reply(
+        welcome_text,
+        parse_mode="Markdown",
+        reply_markup=create_main_keyboard()
+    )
+
+
+@router.callback_query(F.data == "status")
+async def handle_status(callback: CallbackQuery):
+    """Show system status"""
+    if not is_operator(callback.from_user.id):
+        await callback.answer("Unauthorized", show_alert=True)
+        return
+
+    try:
+        async with BuyerAPIClient() as client:
+            status_data = await client.get_status()
+            
+        status_text = (
+            "📊 **System Status**\n\n"
+            f"**Armed:** {'✅ Yes' if status_data.get('is_armed') else '❌ No'}\n"
+            f"**Active Run:** {status_data.get('current_run_id', 'None')}\n"
+            f"**Ruleset:** {status_data.get('active_ruleset', 'None')}\n\n"
+            f"**Today's Stats:**\n"
+            f"• Purchases this hour: {status_data.get('purchases_this_hour', 0)}\n"
+            f"• Spent today: {status_data.get('spent_today', 0):,} ⭐\n\n"
+            f"**Limits:**\n"
+            f"• Max daily spend: {settings.max_spend_per_day:,} ⭐\n"
+            f"• Max hourly purchases: {settings.max_purchases_per_hour}\n"
+        )
+    except Exception as e:
+        logger.error(f"Failed to fetch status: {e}")
+        status_text = "❌ Failed to fetch status. Check buyer service connection."
+
+    await callback.message.edit_text(
+        status_text,
+        parse_mode="Markdown",
+        reply_markup=create_main_keyboard()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "balance")
+async def handle_balance(callback: CallbackQuery):
     """Show Stars balance and spending"""
     if not is_operator(callback.from_user.id):
         await callback.answer("Unauthorized", show_alert=True)
@@ -21,7 +134,7 @@ async def handle_balance(callback: types.CallbackQuery):
             
         balance_text = (
             "💰 **Balance & Spending**\n\n"
-            f"**Stars Balance:** {balance_data['stars_balance']:,} ⭐\n"
+            f"**Stars Balance:** {balance_data.get('stars_balance', 0):,} ⭐\n"
             "**Today's Spending:** 2,150 ⭐\n"  # Would come from database
             "**This Hour:** 450 ⭐\n\n"
             "**Limits:**\n"
@@ -41,9 +154,42 @@ async def handle_balance(callback: types.CallbackQuery):
     )
     await callback.answer()
 
-# Update dry run handler
-@dp.callback_query(F.data == "dryrun")
-async def handle_dryrun(callback: types.CallbackQuery):
+
+@router.callback_query(F.data == "rules")
+async def handle_rules(callback: CallbackQuery):
+    """Show ruleset management"""
+    if not is_operator(callback.from_user.id):
+        await callback.answer("Unauthorized", show_alert=True)
+        return
+
+    # Get active ruleset
+    async with async_session() as session:
+        result = await session.execute(
+            select(Ruleset).where(Ruleset.active == True).order_by(Ruleset.created_at.desc()).limit(1)
+        )
+        active_ruleset = result.scalar_one_or_none()
+
+    rules_text = "📋 **Ruleset Management**\n\n"
+    
+    if active_ruleset:
+        rules_text += f"**Active Ruleset:** {active_ruleset.name}\n"
+        rules_text += f"**Created:** {active_ruleset.created_at.strftime('%Y-%m-%d %H:%M')}\n\n"
+    else:
+        rules_text += "**No active ruleset**\n\n"
+    
+    rules_text += "Use /create_ruleset to create new rules\n"
+    rules_text += "Use /list_rulesets to see all rulesets"
+
+    await callback.message.edit_text(
+        rules_text,
+        parse_mode="Markdown",
+        reply_markup=create_main_keyboard()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "dryrun")
+async def handle_dryrun(callback: CallbackQuery):
     """Execute dry run test"""
     if not is_operator(callback.from_user.id):
         await callback.answer("Unauthorized", show_alert=True)
@@ -52,18 +198,18 @@ async def handle_dryrun(callback: types.CallbackQuery):
     # Get active ruleset
     async with async_session() as session:
         result = await session.execute(
-            "SELECT * FROM rulesets WHERE active = true ORDER BY created_at DESC LIMIT 1"
+            select(Ruleset).where(Ruleset.active == True).order_by(Ruleset.created_at.desc()).limit(1)
         )
-        active_ruleset = result.fetchone()
-    
-    if not active_ruleset:
-        await callback.message.edit_text(
-            "❌ No active ruleset found. Please create and activate a ruleset first.",
-            parse_mode="Markdown",
-            reply_markup=create_main_keyboard()
-        )
-        await callback.answer()
-        return
+        active_ruleset = result.scalar_one_or_none()
+
+        if not active_ruleset:
+            await callback.message.edit_text(
+                "❌ No active ruleset found. Please create and activate a ruleset first.",
+                parse_mode="Markdown",
+                reply_markup=create_main_keyboard()
+            )
+            await callback.answer()
+            return
 
     await callback.message.edit_text(
         "🧪 **Dry Run Mode**\n\n"
@@ -76,11 +222,11 @@ async def handle_dryrun(callback: types.CallbackQuery):
         async with BuyerAPIClient() as client:
             results = await client.dry_run(active_ruleset.id)
             
-        if results["success"]:
-            matches = results["matches"]
+        if results.get("success"):
+            matches = results.get("matches", [])
             results_text = (
                 "🧪 **Dry Run Results**\n\n"
-                f"**Gifts Evaluated:** {results['total_evaluated']}\n"
+                f"**Gifts Evaluated:** {results.get('total_evaluated', 0)}\n"
                 f"**Matches Found:** {len(matches)}\n\n"
             )
             
@@ -93,13 +239,13 @@ async def handle_dryrun(callback: types.CallbackQuery):
                     results_text += f"{i}️⃣ **{gift.get('title', 'Unknown')}**\n"
                     results_text += f"   Source: {source}\n"
                     results_text += f"   Price: {price:,} ⭐\n"
-                    if match["reasons"]:
+                    if match.get("reasons"):
                         results_text += f"   Match: {', '.join(match['reasons'][:2])}\n\n"
-                
+                        
                 if len(matches) > 5:
                     results_text += f"...and {len(matches) - 5} more items\n\n"
                     
-                results_text += f"**Total Cost:** {results['total_cost']:,} ⭐"
+                results_text += f"**Total Cost:** {results.get('total_cost', 0):,} ⭐"
             else:
                 results_text += "No matching items found with current rules."
         else:
@@ -115,3 +261,112 @@ async def handle_dryrun(callback: types.CallbackQuery):
         reply_markup=create_main_keyboard()
     )
     await callback.answer("Dry run complete!")
+
+
+@router.callback_query(F.data == "arm")
+async def handle_arm(callback: CallbackQuery):
+    """Arm the buyer"""
+    if not is_operator(callback.from_user.id):
+        await callback.answer("Unauthorized", show_alert=True)
+        return
+
+    # Get active ruleset
+    async with async_session() as session:
+        result = await session.execute(
+            select(Ruleset).where(Ruleset.active == True).order_by(Ruleset.created_at.desc()).limit(1)
+        )
+        active_ruleset = result.scalar_one_or_none()
+
+        if not active_ruleset:
+            await callback.message.edit_text(
+                "❌ No active ruleset found. Please create and activate a ruleset first.",
+                parse_mode="Markdown",
+                reply_markup=create_main_keyboard()
+            )
+            await callback.answer()
+            return
+
+    try:
+        async with BuyerAPIClient() as client:
+            result = await client.arm_buyer(active_ruleset.id, "live")
+            
+        if result.get("success"):
+            arm_text = (
+                "✅ **Buyer Armed**\n\n"
+                f"**Ruleset:** {active_ruleset.name}\n"
+                f"**Run ID:** {result.get('run_id')}\n"
+                f"**Mode:** Live\n\n"
+                "⚠️ **System is now actively purchasing gifts!**\n"
+                "Monitor carefully and disarm when needed."
+            )
+        else:
+            arm_text = f"❌ Failed to arm buyer: {result.get('error', 'Unknown error')}"
+            
+    except Exception as e:
+        logger.error(f"Arm failed: {e}")
+        arm_text = "❌ Failed to arm buyer. Check buyer service connection."
+
+    await callback.message.edit_text(
+        arm_text,
+        parse_mode="Markdown",
+        reply_markup=create_main_keyboard()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "disarm")
+async def handle_disarm(callback: CallbackQuery):
+    """Disarm the buyer"""
+    if not is_operator(callback.from_user.id):
+        await callback.answer("Unauthorized", show_alert=True)
+        return
+
+    try:
+        async with BuyerAPIClient() as client:
+            result = await client.disarm_buyer()
+            
+        if result.get("success"):
+            disarm_text = (
+                "⏸️ **Buyer Disarmed**\n\n"
+                "System is no longer actively purchasing gifts.\n"
+                "All automated operations have stopped safely."
+            )
+        else:
+            disarm_text = f"❌ Failed to disarm buyer: {result.get('error', 'Unknown error')}"
+            
+    except Exception as e:
+        logger.error(f"Disarm failed: {e}")
+        disarm_text = "❌ Failed to disarm buyer. Check buyer service connection."
+
+    await callback.message.edit_text(
+        disarm_text,
+        parse_mode="Markdown",
+        reply_markup=create_main_keyboard()
+    )
+    await callback.answer()
+
+
+async def initialize_database():
+    """Initialize database tables"""
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+
+async def main():
+    """Main bot entry point"""
+    logging.basicConfig(
+        level=getattr(logging, settings.log_level),
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    logger.info("Starting Telegram Gift Buyer Bot...")
+    
+    # Initialize database
+    await initialize_database()
+    
+    # Start polling
+    await dp.start_polling(bot)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

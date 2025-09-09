@@ -2,45 +2,45 @@
 
 import logging
 import logging.handlers
-import sys
 from pathlib import Path
+from typing import Optional
+
 from shared.config import settings
 
-def setup_logging(service_name: str):
-    """Setup logging for a service"""
+
+def setup_logging(name: str, level: Optional[str] = None) -> logging.Logger:
+    """Setup structured logging for a service"""
     
     # Create logs directory
     log_dir = Path(settings.log_file_path)
-    log_dir.mkdir(exist_ok=True)
+    log_dir.mkdir(parents=True, exist_ok=True)
     
-    # Configure root logger
-    root_logger = logging.getLogger()
-    root_logger.setLevel(getattr(logging, settings.log_level))
+    # Configure logger
+    logger = logging.getLogger(name)
+    logger.setLevel(getattr(logging, level or settings.log_level))
     
-    # Clear existing handlers
-    root_logger.handlers.clear()
+    # Avoid duplicate handlers
+    if logger.handlers:
+        return logger
     
     # Console handler
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_formatter = logging.Formatter(
+    console_handler = logging.StreamHandler()
+    console_format = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    console_handler.setFormatter(console_formatter)
-    root_logger.addHandler(console_handler)
+    console_handler.setFormatter(console_format)
+    logger.addHandler(console_handler)
     
-    # File handler
+    # File handler with rotation
     file_handler = logging.handlers.RotatingFileHandler(
-        log_dir / f"{service_name}.log",
+        log_dir / f"{name}.log",
         maxBytes=10*1024*1024,  # 10MB
         backupCount=5
     )
-    file_formatter = logging.Formatter(
+    file_format = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s'
     )
-    file_handler.setFormatter(file_formatter)
-    root_logger.addHandler(file_handler)
+    file_handler.setFormatter(file_format)
+    logger.addHandler(file_handler)
     
-    # Service-specific logger
-    service_logger = logging.getLogger(service_name)
-    
-    return service_logger
+    return logger
