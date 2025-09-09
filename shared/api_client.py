@@ -1,23 +1,20 @@
-"""API client for buyer service communication"""
+"""API client for communicating with buyer service"""
 
-import asyncio
-import json
-from typing import Dict, Any, Optional
 import aiohttp
-from contextlib import asynccontextmanager
-
+import json
+import logging
+from typing import Dict, Any, Optional
 from shared.config import settings
-from shared.logging_config import setup_logging
 
-logger = setup_logging("api_client")
+logger = logging.getLogger(__name__)
 
 
 class BuyerAPIClient:
-    """Client for communicating with buyer service"""
+    """Client for buyer service API"""
     
     def __init__(self, base_url: str = "http://localhost:8001"):
         self.base_url = base_url
-        self.session: Optional[aiohttp.ClientSession] = None
+        self.session = None
     
     async def __aenter__(self):
         self.session = aiohttp.ClientSession()
@@ -27,51 +24,42 @@ class BuyerAPIClient:
         if self.session:
             await self.session.close()
     
-    async def get_balance(self) -> Dict[str, Any]:
-        """Get current Stars balance"""
+    async def _make_request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
+        """Make HTTP request to buyer API"""
+        if not self.session:
+            self.session = aiohttp.ClientSession()
+        
+        url = f"{self.base_url}{endpoint}"
+        
         try:
-            async with self.session.get(f"{self.base_url}/api/balance") as resp:
-                if resp.status == 200:
-                    return await resp.json()
+            async with self.session.request(method, url, **kwargs) as response:
+                if response.status == 200:
+                    return await response.json()
                 else:
-                    return {"stars_balance": 0, "error": f"HTTP {resp.status}"}
+                    error_text = await response.text()
+                    logger.error(f"API request failed: {response.status} - {error_text}")
+                    raise Exception(f"API request failed: {response.status}")
         except Exception as e:
-            logger.error(f"Balance fetch failed: {e}")
-            return {"stars_balance": 0, "error": str(e)}
+            logger.error(f"Request to {url} failed: {e}")
+            raise
     
-    async def dry_run(self, ruleset_id: int) -> Dict[str, Any]:
-        """Execute dry run"""
-        try:
-            async with self.session.post(
-                f"{self.base_url}/api/dry-run",
-                json={"ruleset_id": ruleset_id}
-            ) as resp:
-                if resp.status == 200:
-                    return await resp.json()
-                else:
-                    error_text = await resp.text()
-                    return {"success": False, "error": f"HTTP {resp.status}: {error_text}"}
-        except Exception as e:
-            logger.error(f"Dry run failed: {e}")
-            return {"success": False, "error": str(e)}
+    async def get_status(self) -> Dict[str, Any]:
+        """Get system status"""
+        return await self._make_request("GET", "/status")
+    
+    async def get_balance(self) -> Dict[str, Any]:
+        """Get Stars balance"""
+        return await self._make_request("GET", "/balance")
     
     async def arm_buyer(self, ruleset_id: int, mode: str = "live") -> Dict[str, Any]:
         """Arm the buyer"""
-        try:
-            async with self.session.post(
-                f"{self.base_url}/api/arm",
-                json={"ruleset_id": ruleset_id, "mode": mode}
-            ) as resp:
-                return await resp.json()
-        except Exception as e:
-            logger.error(f"Arm failed: {e}")
-            return {"success": False, "error": str(e)}
+        data = {"ruleset_id": ruleset_id, "mode": mode}
+        return await self._make_request("POST", "/arm", json=data)
     
     async def disarm_buyer(self) -> Dict[str, Any]:
         """Disarm the buyer"""
-        try:
-            async with self.session.post(f"{self.base_url}/api/disarm") as resp:
-                return await resp.json()
-        except Exception as e:
-            logger.error(f"Disarm failed: {e}")
-            return {"success": False, "error": str(e)}
+        return await self._make_request("POST", "/disarm")
+    
+    async def dry_run(self, ruleset_id: int) -> Dict[str, Any]:
+        """Execute dry run"""
+        return await self._make_request("POST", f"/dry_run/{ruleset_id}")

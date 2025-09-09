@@ -22,3 +22,7 @@ pydantic-settings==2.1.0
 
 # Utilities
 python-dotenv==1.0.0
+
+# Additional dependencies
+redis==5.0.1
+python-multipart==0.0.6
